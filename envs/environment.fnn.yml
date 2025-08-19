@@ -1,0 +1,15 @@
+name: tfbs-pred-fnn
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - biopython
+  - pytorch
+  - optuna
+  - pip
