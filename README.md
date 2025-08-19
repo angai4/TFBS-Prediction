@@ -1,12 +1,13 @@
-# TFBS-Prediction — PWM & TFFM Evaluation
+# TFBS-Prediction — PWM, TFFM & FNN Evaluation
 
-This repository contains pipelines to prepare ENCODE TF peak data and evaluate motif models.
+This repository contains the pipelines used for my MSc research project titled "Prediction of transcription factor binding sites: beyond position weight matrices. Using hidden Markov models and neural networks to identify motifs and predict bindings" associated with University College London. In summary the pipelines, prepare ENCODE TF ChIP-seq peak data and evaluate TFBS prediction models:
 
--  **Current modules**
-  - **PWM** (Position Weight Matrices): discovery (MEME), scanning (MAST), background matching, ROC/AUC evaluation.
-  - **TFFM** (Transcription Factor Flexible Models): first-order and detailed models initialized from MEME motifs.
+- **PWM** (Position Weight Matrices): MEME discovery, MAST scanning, GC-matched backgrounds, ROC/AUC.
+- **TFFM** (Transcription Factor Flexible Models): first-order & detailed models initialized from MEME motifs.
+- **FNN** (Feed-Forward Neural Network): one-hot windows with GC-matched negatives, Optuna tuning + 10-fold CV.
 
--  **Planned**: separate modules/environments for HMM/TFFM extensions and FNN baselines.
+> **Scope note:** PWM, TFFM, and FNN have **separate scripts** and **separate Conda environments**.  
+> TFFM specifically requires **Python 2.7**, **Biopython ≥ 1.61**, **GHMM**, and access to the local **TFFM** package via `PYTHONPATH`.
 
 ---
 
@@ -16,26 +17,57 @@ This repository contains pipelines to prepare ENCODE TF peak data and evaluate m
 .
 ├─ pwm/                      # PWM-only scripts
 ├─ tffm/                     # TFFM (first-order & detailed) scripts
+├─ fnn/                      # FNN preparation, tuning, and evaluation scripts
 ├─ envs/
-│  ├─ environment.pwm.yml    # Conda env for PWM (Python 3)
-│  └─ environment.tffm.yml   # Conda env for TFFM (Python 2.7)
+│  ├─ environment.pwm.yml    # Conda env (Python 3) for PWM
+│  ├─ environment.tffm.yml   # Conda env (Python 2.7) for TFFM
+│  └─ environment.fnn.yml    # Conda env (Python 3) for FNN
 ├─ README.md
 └─ .gitignore
 ```
 
 ---
 
-## Setup Instructions (Conda)
+## Data & Reference Assumptions
+
+Scripts assume the following under your home directory:
+
+```
+~/msc_project/
+├─ data/<TF>/
+│  ├─ raw/                   # downloaded peak files (ENCODE)
+│  ├─ sorted/                # concatenated + sorted peaks
+│  ├─ top600/                # ±50bp windows around top 600 summits (+ FASTA)
+│  ├─ crossval/              # 10-fold CV over remaining peaks
+│  └─ fnn_crossval/          # FNN-friendly copies (train/test pos/neg)
+├─ results/<TF>/...          # per-method outputs (motif/tffm_*/fnn)
+├─ master_results/...        # cross-TF master metrics (CSV)
+├─ background/...            # GC-unique windows, GC% catalogs, etc.
+└─ genomes/hg19.fa           # reference FASTA (see below)
+```
+
+**Reference genome path** expected by many scripts:
+
+```bash
+mkdir -p ~/genomes
+# place your hg19 FASTA here:
+#   ~/genomes/hg19.fa
+samtools faidx ~/genomes/hg19.fa
+```
+
+---
+
+## Environments (Conda)
 
 ### A) PWM environment (Python 3)
 
-1) Create the environment:
 ```bash
 conda env create -f envs/environment.pwm.yml
 conda activate tfbs-pred-pwm
 ```
 
-2) Verify tools:
+Verify:
+
 ```bash
 python -c "import sys, Bio, sklearn; print(sys.version); print('biopython:', Bio.__version__, 'sklearn:', sklearn.__version__)"
 bedtools --version
@@ -46,178 +78,194 @@ bigWigToBedGraph 2>&1 | head -n1
 jq --version
 ```
 
-3) Reference genome assumed by scripts:
-```bash
-mkdir -p ~/genomes
-# place hg19.fa as ~/genomes/hg19.fa
-samtools faidx ~/genomes/hg19.fa
-```
-
-**envs/environment.pwm.yml**
-
-```yaml
-name: tfbs-pred-pwm
-channels:
-  - conda-forge
-  - bioconda
-dependencies:
-  - python=3.11
-  - numpy
-  - scipy
-  - matplotlib
-  - scikit-learn
-  - biopython
-  - pip
-  - bedtools>=2.31
-  - samtools
-  - meme=5.*
-  - ucsc-bigwigtobedgraph
-  - jq
-  - wget
-  - curl
-  - gawk
-  - coreutils
-```
+`envs/environment.pwm.yml` pins common CLI tools (bedtools, samtools, MEME+MAST, ucsc-bigwigtobedgraph, jq, etc.).
 
 ### B) TFFM environment (Python 2.7)
 
-**Requirements:**
-- Python 2.7
-- Biopython ≥ 1.61
-- GHMM library (Python module `ghmm` importable)
-- TFFM package available on your `PYTHONPATH` (e.g., the folder that contains `tffm_module.py`)
+Requirements: Python 2.7, Biopython ≥ 1.61 (Py2-compatible), the GHMM library (`import ghmm`), and the TFFM package on your `PYTHONPATH`.
 
-1) Create & activate the TFFM env (legacy packages):
 ```bash
 conda env create -f envs/environment.tffm.yml
 conda activate tfbs-pred-tffm
-```
 
-2) Point Python to your TFFM package:
-```bash
-# Example: if your TFFM source lives at /home/aaron/msc_project/TFFM
+# Point Python to your local TFFM package (adjust path if different)
 export PYTHONPATH="/home/aaron/msc_project/TFFM:${PYTHONPATH}"
 ```
-*The scripts also prepend that path with `sys.path.insert(...)`; update there if your path differs.*
 
-3) Verify imports:
+Quick checks:
+
 ```bash
 python2 -c "import sys; print(sys.version)"
-python2 -c "import Bio;  import numpy, sklearn, matplotlib; print('Bio:', Bio.__version__)"
+python2 -c "import Bio; print('biopython:', Bio.__version__)"
 python2 -c "import ghmm; print('ghmm ok')"
 python2 -c "import tffm_module, constants; print('TFFM ok')"
 ```
 
-**envs/environment.tffm.yml** *(versions chosen to match the last Python-2-compatible releases)*:
+If `pip install ghmm` fails on your platform, install GHMM via your OS or build from source; then re-try `import ghmm`.
 
-```yaml
-name: tfbs-pred-tffm
-channels:
-  - defaults
-  - conda-forge
-dependencies:
-  - python=2.7
-  - numpy=1.16.*
-  - scipy=1.2.*
-  - matplotlib=2.2.*
-  - scikit-learn=0.20.4
-  - biopython>=1.61,<1.78
-  - pip
-  # GHMM is often not available via conda; try pip or your OS package:
-  #   pip install ghmm
-  # or build from source following GHMM instructions.
-```
-
- **Notes for TFFM/GHMM on Python 2.7**
-- Some mirrors no longer host Py2 packages. If conda fails, try pip within the env.
-- GHMM may require system dependencies (e.g., `libghmm`) and compilation. Ensure `import ghmm` works before running TFFM scripts.
-
----
-
-## Data Assumptions
-
-Scripts expect the following structure under `~/msc_project`:
+### C) FNN environment (Python 3)
 
 ```bash
-data/<TF>/crossval/fold_XX/
-  ├─ train_TXX.fa
-  ├─ test_FXX.fa
-  └─ bg_BXX.fa
-
-results/<TF>/motif/meme.meme
-
-genomes/hg19.fa  (indexed: hg19.fa.fai)
+conda env create -f envs/environment.fnn.yml
+conda activate tfbs-pred-fnn
 ```
+
+Includes: numpy, scipy, pandas, matplotlib, scikit-learn, biopython, pytorch (CPU), optuna.
 
 ---
 
-## Usage
-
-### PWM workflow (high level)
+## PWM Evaluation Workflow 
 
 1. **Download & prepare peaks**
-   `pwm/download_encode_peaks.sh` → `pwm/concat_sort_peaks.sh` → `pwm/prune_low_peaks.sh`
+
+```bash
+bash pwm/encode_extraction.sh
+bash pwm/cat_sort.sh
+bash pwm/filter_lt_1800.sh         # drops TFs with < 1800 peaks
+```
 
 2. **Create FASTAs**
-   - `pwm/make_top600_fasta.sh` (MEME input)
-   - `pwm/make_remaining_fasta.sh` (rest for CV)
 
-3. **Cross-validation splits**
-   `pwm/make_folds.py`
+```bash
+bash pwm/bed_to_fasta.sh       # ±50 bp around top 600 summits → MEME input
+bash pwm/remaining_bed_to_fasta.sh    # remaining peaks → crossval/remaining_fasta.fa
+```
+
+3. **10-fold cross-validation splits**
+
+```bash
+python3 pwm/make_cv_kfold.py ~/msc_project/data
+```
 
 4. **Motif discovery & scanning**
-   `pwm/run_meme_top600.sh` → `pwm/run_mast_train.sh`
 
-5. **Backgrounds & evaluation**
-   `pwm/build_background_windows.py` → `pwm/gc_from_folds.py` → `pwm/gc_matched_background.py` → `pwm/pwm_auc.py`
-
-### TFFM evaluation
-
-**First-order TFFM:**
 ```bash
-# activate the Python 2.7 env and set PYTHONPATH to your TFFM package
-conda activate tfbs-pred-tffm
-export PYTHONPATH="/home/aaron/msc_project/TFFM:${PYTHONPATH}"
-
-python2 tffm/tffm_first_order_cv.py \
-  [--max-tfs N] \
-  [--tfs TF1 TF2 ...]
+bash pwm/meme_v2.sh         # MEME on top600 FASTA per TF
+bash pwm/run_mast.sh          # MAST on train sets per fold
 ```
 
-**Detailed TFFM:**
-```bash
-conda activate tfbs-pred-tffm
-export PYTHONPATH="/home/aaron/msc_project/TFFM:${PYTHONPATH}"
+5. **Background windows & PWM evaluation**
 
-python2 tffm/tffm_detailed_cv.py \
-  [--max-tfs N] \
-  [--tfs TF1 TF2 ...]
+```bash
+python3 pwm/calc_gc_crg36.py
+python3 pwm/make_test_bed.py
+python3 pwm/calc_test_gc.py
+python3 pwm/make_bg_fa_v2.py
+python3 pwm/pwm_auc_calc.py              # per-fold ROC/AUC, per-TF & master CSVs
 ```
+
+**Outputs:**
+- Per TF: `results/<TF>/motif/…`, `results/<TF>/pwm/{figures,metrics}`
+- Master: `master_results/pwm/metrics/master_auc.csv`
 
 ---
 
-## Outputs
+## TFFM Evaluation Workflow
 
-**Per TF:**
+Activate TFFM env and set PYTHONPATH (see above), then:
+
+### First-order model
+
+```bash
+python2 tffm/tffm_1st_order_v2.4.py \
+  [--max-tfs N] \
+  [--tfs TF1 TF2 ...]
+```
+
+### Detailed model
+
+```bash
+python2 tffm/TFFM_detailed.py \
+  [--max-tfs N] \
+  [--tfs TF1 TF2 ...]
+```
+
+**Inputs:**
+```
+data/<TF>/crossval/fold_XX/{train_TXX.fa, test_FXX.fa, bg_BXX.fa}
+results/<TF>/motif/meme.meme
+```
+
+**Outputs:**
 - First-order: `results/<TF>/tffm_1st_order/{model,figures,metrics}`
 - Detailed: `results/<TF>/tffm_detailed/{model,figures,metrics}`
+- Master CSVs at:
+  - `master_results/tffm_1st_order/metrics/master_auc.csv`
+  - `master_results/tffm_detailed/metrics/master_auc.csv`
 
-**Master CSVs:**
-- `master_results/tffm_1st_order/metrics/master_auc.csv`
-- `master_results/tffm_detailed/metrics/master_auc.csv`
+---
+
+## FNN Evaluation Workflow
+
+1. **Prepare FNN CV copies** (renames CV files into FNN-friendly names)
+
+```bash
+bash fnn/create_fnn_crossval.sh
+```
+
+2. **Create BED from training positives** (parse FASTA headers)
+
+```bash
+python3 fnn/make_train_bed.py ~/msc_project/data
+```
+
+3. **Compute GC% for training positives**
+
+```bash
+python3 fnn/calc_train_gc.py
+# writes: data/<TF>/fnn_crossval/fold_XX/train_pos_TXX.gc.txt
+```
+
+4. **GC-matched training negatives**
+
+```bash
+python3 fnn/make_train_neg_fa.py
+# writes: data/<TF>/fnn_crossval/fold_XX/train_neg_TXX.fa
+```
+
+5. **Optuna tuning (fold_01) + Full 10-fold CV**
+
+```bash
+python3 fnn/fnn.py
+# per TF:
+#   results/<TF>/fnn/figures/fnn_roc_fold_*.png
+#   results/<TF>/fnn/metrics/<TF>_auc.csv
+#   results/<TF>/fnn/metrics/<TF>_detailed_metrics.txt
+#   results/<TF>/fnn/model/<TF>_best_model.txt
+```
+
+6. **Aggregate across TFs**
+
+```bash
+python3 fnn/write_fnn_master_csv.py
+# writes: master_results/fnn/metrics/master_auc.csv
+```
 
 ---
 
 ## Troubleshooting
 
-- **ModuleNotFoundError: ghmm**  
-  Install GHMM inside the `tfbs-pred-tffm` env (via `pip install ghmm` or system package), then re-run `python2 -c "import ghmm"`.
+- **"command not found" for bedtools/samtools/meme/mast**  
+  Ensure you're in the PWM env: `conda activate tfbs-pred-pwm`. Then:
+  ```bash
+  conda install -c conda-forge -c bioconda bedtools samtools meme ucsc-bigwigtobedgraph jq
+  ```
 
-- **TFFM import fails**  
-  Ensure `PYTHONPATH` includes the directory with `tffm_module.py` and `constants.py`.
+- **TFFM import fails (tffm_module/constants not found)**  
+  Set your `PYTHONPATH` to the local TFFM source:
+  ```bash
+  export PYTHONPATH="/path/to/TFFM:${PYTHONPATH}"
+  ```
 
-- **matplotlib backend errors**  
-  Scripts set `Agg` backend for headless plotting; no display is required.
+- **ModuleNotFoundError: ghmm in TFFM env**  
+  Try:
+  ```bash
+  conda activate tfbs-pred-tffm
+  pip install ghmm  # or build/install OS package; ensure `import ghmm` works
+  ```
+
+- **Matplotlib display errors**  
+  TFFM & evaluation scripts set `Agg` backend; no display is required.
 
 - **Different genome path**  
-  Update `GENOME`/`CRG_ROOT` variables in scripts to match your setup.
+  Update script constants (`GENOME`, `CRG_ROOT`, etc.) to match your setup.
