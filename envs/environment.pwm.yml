@@ -1,0 +1,21 @@
+name: tfbs-pred-pwm
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - matplotlib
+  - scikit-learn
+  - biopython
+  - pip
+  - bedtools>=2.31
+  - samtools
+  - meme=5.*
+  - ucsc-bigwigtobedgraph
+  - jq
+  - wget
+  - curl
+  - gawk
+  - coreutils

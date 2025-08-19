@@ -3,3 +3,12 @@ __pycache__/
 .DS_Store
 *.swp
 .env
+
+# common run artifacts (keep these out of the repo)
+meme_out/
+mast_out/
+*.nuc.txt
+*.gc.txt
+*.bed
+*.bedGraph
+*.fa
