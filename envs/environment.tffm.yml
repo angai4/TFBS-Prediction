@@ -1,0 +1,18 @@
+name: tfbs-pred-tffm
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python=2.7
+  - numpy=1.16.*
+  - scipy=1.2.*
+  - matplotlib=2.2.*
+  - scikit-learn=0.20.4
+  - biopython=1.76
+  - lxml=4.3.*
+  - pip=20.3.*
+  - setuptools<45
+  - wheel<0.35
+  - swig
+  - pip:
+      - ghmm
